@@ -1,0 +1,1756 @@
+---
+title: "Applications OF GOLIATH"
+output: html_notebook
+---
+# Import packages
+```{r}
+library("UBL")
+library("reticulate")
+library("psych")
+library("RColorBrewer")
+library("ggplot2")
+library("h2o")
+library("beepr")
+library("kernelboot")
+library("randomForest")
+library("matrixStats")
+library("plotly")
+options(error = beepr::beep)
+# load("WKS_save.RData")
+source("C:/Users/samgo/OneDrive/Perso/Thèse/Travaux/GOLIATH/Soumission TMLR/Soumission/GOLIATH.R")
+```
+ 
+autre autoML à exploiter :
+https://auto.gluon.ai/scoredebugweight/api/autogluon.task.html
+http://epistasislab.github.io/tpot/api/
+https://github.com/shankarpandala/lazypredict/tree/master + https://lazypredict.readthedocs.io/en/latest/usage.html#regression
+https://medium.com/@gracy.f/automl-for-python-on-windows-314ca8ea6955 + https://automl.github.io/auto-sklearn/master/#example + https://towardsdatascience.com/python-automl-sklearn-fd85d3b3c5e
+https://moez-62905.medium.com/top-automl-python-libraries-in-2022-2d306cf7acf0
+
+autres datasets : 
+DIR : https://github.com/YyzHarry/imbalanced-regression/tree/main/imdb-wiki-dir
+https://paobranco.github.io/DataSets-IR/
+https://github.com/paobranco/DARING
+
+autre benchmark :
+DIR : https://analyticsindiamag.com/deep-imbalanced-regression-complete-guide/ + https://github.com/YyzHarry/imbalanced-regression/blob/main/tutorial/tutorial.ipynb
+
+
+ 
+```{r}
+sessionInfo()
+```
+
+ 
+# ILLUSTRATIVE APPLICATION
+## Import dataset
+```{r}
+test_size = 0.1 # mettre un nombre ? 500 environ pour l'illu
+#data = read.csv("C:/Users/samgo/Downloads/paobranco-DataSets-IR/CSV_data/boston.csv")
+data = read.csv2("C:/Users/samgo/OneDrive/Perso/Thèse/Travaux/GOLIATH/Soumission TMLR/Soumission/Illustration/DATA_TEMPERATURE.csv") #https://archive.ics.uci.edu/ml/datasets/SML2010#
+```
+ 
+```{r}
+str(data)
+plot(data$X3.Temperature_Comedor_Sensor-data$X4.Temperature_Habitacion_Sensor)
+sum(is.na(data$X3.Temperature_Comedor_Sensor))
+sum(is.na(data$X4.Temperature_Habitacion_Sensor))
+data$Temp = (data$X3.Temperature_Comedor_Sensor+data$X4.Temperature_Habitacion_Sensor)/2
+Y = "Temp"
+colnames(data) = c("Date",
+"Time",
+"Indoor_temperature_(dinning-room)",
+"Indoor_temperature_(room)",
+"Weather_forecast_temperature",
+"Carbon_dioxide_in_ppm_(dinning_room)",
+"Carbon_dioxide_in_ppm_(room)",
+"Relative_humidity_(dinning_room)",
+"Relative_humidity_(room)",
+"Lighting_(dinning_room)",
+"Lighting_(room)",
+"Rain",
+"Sun_dusk",
+"Wind",
+"Sun_light_in_west_facade",
+"Sun_light_in_east_facade",
+"Sun_light_in_south_facade",
+"Sun_irradiance",
+"Enthalpic_motor_1",
+"Enthalpic_motor_2",
+"Enthalpic_motor_turbo",
+"Outdoor_temperature",
+"Outdoor_relative_humidity",
+"Day_of_the_week_(computed_from_the_date)",
+"Temp")
+# delete rows with missing values
+print(paste0("Nombre de lignes initial : ",nrow(data)))
+sum(is.na(data))
+sum(rowSums(is.na(data))>0)
+data = data[which(rowSums(is.na(data))==0),]
+sum(is.na(data))
+print(paste0("Nombre de lignes final : ",nrow(data)))
+```
+ 
+ 
+```{r}
+analyse_quanti = function(base,var){
+  if (class(base[,colnames(data)[col]]) != "character"){
+    cat("\n \n")
+    print(paste0("********************   Analyse de ",var,"   ****************** "))
+    print(summary(base[var]))
+    print(t(round(psych::describe(base[var]),0)))
+    hist(base[,var], main = var, breaks = 100, col = brewer.pal(n=30,"RdBu"))
+    boxplot(base[var], main = var,col = "deepskyblue4")
+  }
+}
+for (col in seq(ncol(data))){
+  analyse_quanti(base=data,var=colnames(data)[col])
+}
+str(data)
+```
+There are :
+  - unimodal symetric continuous distributions : temperature, humidity
+  - asymetric postiive continuous distributions : carbon_dioxyde, lighting, wind, sun light
+  - binary variable : rain
+  - discrete variable : day of the week
+  - bounded continuous distributions : sun_dusk
+ 
+Suppression some variables
+```{r}
+data$`Indoor_temperature_(dinning-room)`=NULL
+data$`Indoor_temperature_(room)`=NULL
+data$Date = NULL
+data$Time = NULL
+data$Enthalpic_motor_1 = NULL
+data$Enthalpic_motor_2 = NULL
+data$Enthalpic_motor_turbo = NULL
+
+colnames(data) =c(
+  "Weather_forecast_temperature",
+  "Carbon_dioxide_in_ppm_dinning_room",
+  "Carbon_dioxide_in_ppm_room",
+  "Relative_humidity_dinning_room",
+  "Relative_humidity_room",
+  "Lighting_dinning_room",
+  "Lighting_room",
+  "Rain",
+  "Sun_dusk",
+  "Wind",
+  "Sun_light_in_west_facade",
+  "Sun_light_in_east_facade",
+  "Sun_light_in_south_facade",
+  "Sun_irradiance",
+  "Outdoor_temperature",
+  "Outdoor_relative_humidity",
+  "Day_of_the_week",
+  "Temp")
+ 
+ 
+data$Outdoor_temperature = NULL
+data$Day_of_the_week = as.numeric(data$Day_of_the_week)
+data$Rain = as.numeric(data$Rain)
+```
+ 
+ 
+## Weigthing
+### Distribution of Y analysis
+```{r}
+hist(data[,Y], breaks=45, prob = T , col = brewer.pal(n=30,"RdBu"))
+lines(density(data[,Y]),col="darkred",lwd=2)
+summary(data[,Y])
+plot(ecdf(data[,Y]))
+```
+ 
+ 
+ 
+2 possibilities for resampling :
+  - augmentation of the train sample with synthetic data (generate rare values and no majority values)
+  - generate a new whole sample : synhtetic if we use a generator (as ROSE) : cf comparison between ROSE and GN
+cf proppsition below for an alternative sampling
+### Relevance function of UBL
+```{r}
+phiF.args <- phi.control(data[,Y],method="extremes",extr.type="both")
+plot(data[,Y],UBL::phi(data[,Y],phiF.args))
+```
+Does not work as we want (both sides)....
+We need to define the relevance function.... and so define inflexion points...
+```{r}
+rel <- matrix(0,ncol=3,nrow=0)
+rel <- rbind(rel,c(11,1,0))
+rel <- rbind(rel,c(14,0,0))
+rel <- rbind(rel,c(26,0,0))
+rel <- rbind(rel,c(28,1,0))
+rel
+phiF.argsR <- phi.control(data[,Y],method="range",control.pts=rel)
+plot(data[,Y],UBL::phi(data[,Y], control.parms=phiF.argsR))
+```
+It is just a function with nodes (inflexion points) and linear interpolation between ....
+ 
+### Relevance function by segment (discretization)
+We can get the previous distribution with a discretization
+```{r}
+fy = density(data[,Y])
+plot(fy$x,fy$y,col="darkred")
+mini = min(data[,Y])
+maxi = max(data[,Y])
+seuil_imb = 20
+rf = data[,Y] * 0
+for (i in seq(length(rf))){
+  if (data[,Y][i]>seuil_imb){
+    rf[i] = 0}
+  else {
+    rf[i] = (data[,Y][i] - seuil_imb)/(mini - seuil_imb)}
+}
+plot(data[,Y],UBL::phi(data[,Y],phiF.args), col = "deepskyblue4")
+points(data[,Y],rf,col="darkred")
+```
+*CAUTION* : This type of relevance function is to redress a sample from a sample with synthetic data and not to generate a new whole one.
++ : keep the real observations (but we need some observations for the test sample)
+- : need to define the segments so the quantile, threshold, etc. (discretization of the support)
+- : Do not use the distribution continuous of the Y
+### Relevance function based on the kernel density estimate
+Propose to avoid discretization and using the contunous distribution of Y.
+IDEA : More a segment is power in observations, more there are generated ones
+Note that there is often a problem with the relevance function of Ribeiro : "Error in GaussNoiseRegress(Temp ~ ., train_imb_ssDM) :
+All the points have relevance 0. Please, redefine your relevance function!"
+*PROPOSITION* : Using the inverse of a Classical Kernel Density Estimate
+```{r}
+weight_y = function(y){
+  kde_de = density(y)
+  w = approx(kde_de$x,kde_de$y,xout=y)$y
+  w = 1/w
+  #w = w^2
+  w/sum(w)
+  w/max(w)
+}
+weight_y2 = function(y){
+  kde_de = density(y)
+  w = approx(kde_de$x,kde_de$y,xout=y)$y
+  w = 1/w
+  w = w^2
+  w/sum(w)
+  w/max(w)
+}
+Y="Temp"
+y = data[,Y]
+wdata = weight_y(y)
+w2data = weight_y2(y)
+plot(y,wdata,col="red")
+points(data[,Y],UBL::phi(data[,Y], control.parms=phiF.argsR))
+points(y,w2data,col="darkred")
+```
++ : Use the whole distribution of Y as continuous
++ : do not require parameter, the relevance function can be automatic, without parameter
++ : it is also possible to use specific weighting
++ : can be adapted for any distributions (e.g multimodal)
+- : Not well-adapted for oversampling (generated synthetic data) because of the positive weights of "majority" observations.
+*PROPOSITION* : Generate a whole sample with real and synthetic data --> Have a parameter for real/synthetic data generation such as : observation already drawn : generate a synthetic data else draw the real data (pool of seed)
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+## Sampling
+### Train-Test sampling
+Drawing in according to the weighting by inverse of the KDE (to get more rare observations and a distribution uniforme : "1/f^ x f")
+*ATTENTION* QUels impact a avoir un Y uniforme dans la regression ?
+ 
+```{r}
+set.seed(42)
+id_test = sample(nrow(data),test_size*nrow(data),replace=F,prob=wdata)
+id_test
+test = data[id_test,]
+train = data[-id_test,]
+Comp_hist_Y = function(ech0,ech1,name0,name1){
+  ech0$ech = name0
+  ech1$ech = name1
+  df = rbind(ech0,ech1)
+  print(ggplot(df, aes(x=Temp, fill=ech, color=ech)) +
+    geom_histogram(position="identity", alpha=0.5)+
+    scale_color_manual(values=c("darkred","deepskyblue4"))+
+    scale_fill_manual(values=c("darkred","deepskyblue4")))
+  print(ggplot(df, aes(x=Temp, fill=ech, color=ech)) +
+    geom_histogram(aes(y=..density..),position="identity", alpha=0.5)+
+    geom_density(alpha=0.6)+
+    scale_color_manual(values=c("darkred","deepskyblue4"))+
+    scale_fill_manual(values=c("darkred","deepskyblue4")))
+}
+Comp_hist_Y(train,test,"train","test")
+```
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+### Construction of an imbalanced train sample
+ 
+```{r}
+prop_train_imb = 0.1
+N_sample = 10
+# seeds = sample(seq(1000),2*N_sample) ; seeds
+seeds = c(715,225,801,605,804,540,654,646,448,279,715,225,801,605,804,540,654,646,448,279)
+```
+ 
+```{r}
+train_imb=list()
+test=list()
+train=list()
+n_train_imb=floor(prop_train_imb*nrow(data))
+for (i in seq(2*N_sample)){
+  set.seed(seeds[i])
+  id_test = sample(nrow(data),test_size*nrow(data),replace=F,prob=w2data)
+  test_i = data[id_test,]
+  train_i = data[-id_test,]
+  train = append(train,list(train_i))
+  test = append(test,list(test_i))
+  train_imb = append(train_imb,list(train_i[sample(nrow(train_i),n_train_imb,replace=F),]))
+}
+names(train_imb) = paste0("run_",seeds)
+names(train) = paste0("run_",seeds)
+names(test) = paste0("run_",seeds)
+Comp_hist_Y(train[[1]],train_imb[[1]],"train","train_imb")
+
+set.seed(42)
+
+```
+ 
+ 
+ 
+ 
+## Generation of new train samples
+ 
+#### Benchmark
+```{r}
+pert = 0.05
+k_smote = 5
+#stop("début génération")
+```
+ 
+##### Generation based on GNR (UBL)
+ATTENTION : leur fonction ne fonctionne pas 1 fois sur 3 (relevance nulle)
+```{r}
+train_BK_GNR = list()
+for (i in seq(2*N_sample)){
+   # donne une fonction rel nulle parfois
+  train_BK_GNR_i = try(GaussNoiseRegress(formula(paste0(Y ,"~ .")), train_imb[[i]], pert=pert), silent = T)
+  if (class(train_BK_GNR_i) == "try-error"){
+    train_BK_GNR = append(train_BK_GNR, list(NA))
+  } else {
+    train_BK_GNR = append(train_BK_GNR, list(train_BK_GNR_i))
+  }
+}
+names(train_BK_GNR) = paste0("run_",seeds)
+if (length(names(train_BK_GNR[!is.na(train_BK_GNR)])) > N_sample){
+  train_BK_GNR = train_BK_GNR[names(train_BK_GNR[!is.na(train_BK_GNR)])]
+  train_BK_GNR = train_BK_GNR[1:N_sample]
+} else {
+  beepr::beep(5)
+  stop("pas assez de bons résultats avec UBL:GNR")
+}
+```
+ 
+##### Generation based on OS (UBL)
+```{r}
+train_BK_OS = list()
+for (i in names(train_BK_GNR)){
+   # donne une fonction rel nulle parfois
+  train_BK_OS_i = try(GaussNoiseRegress(formula(paste0(Y ,"~ .")), train_imb[[i]], pert=0), silent = T)
+  if (class(train_BK_OS_i) == "try-error"){
+    train_BK_OS = append(train_BK_OS, list(NA))
+  } else {
+    train_BK_OS = append(train_BK_OS, list(train_BK_OS_i))
+  }
+}
+```
+ 
+ 
+ 
+##### Generation based on SMOTER (UBL)
+```{r}
+train_BK_SmoteR = list()
+for (i in names(train_BK_GNR)){
+   # donne une fonction rel nulle parfois
+  train_BK_SmoteR_i = try(SmoteRegress(formula(paste0(Y ,"~ .")), train_imb[[i]], k=k_smote), silent = T)
+  if (class(train_BK_SmoteR_i) == "try-error"){
+    train_BK_SmoteR = append(train_BK_SmoteR, list(NA))
+  } else {
+    train_BK_SmoteR = append(train_BK_SmoteR, list(train_BK_SmoteR_i))
+  }
+}
+```
+ 
+##### Generation based on SMOGN (UBL)
+```{r}
+train_BK_SmoGN = list()
+for (i in names(train_BK_GNR)){
+   # donne une fonction rel nulle parfois
+  train_BK_SmoGN_i = try(SMOGNRegress(formula(paste0(Y ,"~ .")), train_imb[[i]], k=k_smote,pert=pert), silent = T)
+  if (class(train_BK_SmoGN_i) == "try-error"){
+    train_BK_SmoGN = append(train_BK_SmoGN, list(NA))
+  } else {
+    train_BK_SmoGN = append(train_BK_SmoGN, list(train_BK_SmoGN_i))
+  }
+}
+```
+ 
+ 
+##### Generation based on WERCS (UBL) 
+```{r}
+train_BK_WERCS = list()
+for (i in names(train_BK_GNR)){
+   # donne une fonction rel nulle parfois
+  train_BK_WERCS_i = try(WERCSRegress(formula(paste0(Y ,"~ .")), train_imb[[i]]), silent = T)
+  if (class(train_BK_WERCS_i) == "try-error"){
+    train_BK_WERCS = append(train_BK_WERCS, list(NA))
+  } else {
+    train_BK_WERCS = append(train_BK_WERCS, list(train_BK_WERCS_i))
+  }
+}
+```
+ 
+ 
+##### Generation based on ADASYN (ILR)
+
+
+
+
+```{r}
+rm(py)
+train_BK_ADASYN = list()
+py_run_string("from ImbalancedLearningRegression import adasyn")
+for (i in names(train_BK_GNR)){
+   # donne une fonction rel nulle parfois
+    py$Y<-r_to_py(Y)
+    py$train_imb=r_to_py(train_imb[[i]])
+    py_run_string("train_BK_ADASYNR = adasyn(data = train_imb, y = Y)")
+    train_BK_ADASYN_i = py$train_BK_ADASYNR
+  if (class(train_BK_ADASYN_i) == "try-error"){
+    train_BK_ADASYN = append(train_BK_ADASYN, list(NA))
+  } else {
+    train_BK_ADASYN = append(train_BK_ADASYN, list(train_BK_ADASYN_i))
+  }
+}
+
+```
+
+##### Retraitements
+filtre sur les résultats disponibles d'UBL
+```{r}
+train_imb = train_imb[names(train_BK_GNR[!is.na(train_BK_GNR)])][1:N_sample]
+train = train[names(train_BK_GNR[!is.na(train_BK_GNR)])][1:N_sample]
+test = test[names(train_BK_GNR[!is.na(train_BK_GNR)])][1:N_sample]
+```
+ 
+renommage des runs
+```{r}
+# names(train_imb) = paste0("run_",seeds)
+names(train) = names(train_imb)
+names(test) = names(train_imb)
+names(train_BK_GNR) = names(train_imb)
+names(train_BK_OS) = names(train_imb)
+names(train_BK_SmoteR) = names(train_imb)
+names(train_BK_SmoGN) = names(train_imb)
+names(train_BK_WERCS) = names(train_imb)
+names(train_BK_ADASYN) = names(train_imb)
+names(train_imb)
+
+```
+ 
+ 
+```{r}
+beepr::beep(2)
+# stop("Benchmark")
+```
+
+ 
+ 
+ 
+### GOLIATH
+ 
+Prepa Data
+```{r}
+mod = "mix"
+method_y = 5
+hmult = 0.1
+pert = 0.05
+k_smote = 5
+```
+ 
+##### Oversampling : classical bootstrap
+```{r, warning=F}
+CSB_paramOS = list('kern'='GN', 'pert'= 0)
+train_GOLIATH_OS = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+  train_GOLIATH_OS_i = GOLIATH(X=exo,type='CSB',w=w,N=N_new, CSB_param=CSB_paramOS, clustering=F,mode = mod,Y=endo, method_Y=0)$synth
+  train_GOLIATH_OS = append(train_GOLIATH_OS, list(train_GOLIATH_OS_i))
+}
+names(train_GOLIATH_OS) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+```
+ 
+ 
+##### Gaussian Mixture Model 
+```{r , warning=F}
+m = 3
+ 
+train_GOLIATH_GMM = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+  train_GOLIATH_GMM_i = GOLIATH(X=exo,Y=endo,m=m, type='GaussMM',w=w,N=N_new)$synth
+  train_GOLIATH_GMM = append(train_GOLIATH_GMM, list(train_GOLIATH_GMM_i))
+}
+ 
+names(train_GOLIATH_GMM) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+```
+ 
+ 
+##### CSB : CSB
+```{r, warning=F}
+CSB_param_CSB = list('kern'='gaussian','hmult'=hmult)
+train_GOLIATH_CSB_Y5 = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+train_GOLIATH_CSB_Y5_i = GOLIATH(X=exo,type='CSB',clustering = F ,w=w,N=N_new, CSB_param=CSB_param_CSB, mode = mod,Y=endo, method_Y=method_y)$synth 
+  train_GOLIATH_CSB_Y5 = append(train_GOLIATH_CSB_Y5, list(train_GOLIATH_CSB_Y5_i))
+}
+names(train_GOLIATH_CSB_Y5) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+```
+ 
+
+
+##### CSB : ROSE
+```{r, warning=F}
+CSB_param_ROSE = list('kern'='ROSE', 'hmult'=hmult)
+train_GOLIATH_ROSE_Y5 = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+  train_GOLIATH_ROSE_Y5_i = GOLIATH(X=exo,type='CSB',clustering = F ,w=w,N=N_new, CSB_param=CSB_param_ROSE, mode = mod,Y=endo, method_Y=method_y)$synth 
+  train_GOLIATH_ROSE_Y5 = append(train_GOLIATH_ROSE_Y5, list(train_GOLIATH_ROSE_Y5_i))
+}
+names(train_GOLIATH_ROSE_Y5) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+```
+ 
+##### CSB : ROSE - cluster
+```{r, warning=F}
+CSB_param_ROSE = list('kern'='ROSE', 'hmult'=hmult)
+train_GOLIATH_ROSECl_Y5 = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+train_GOLIATH_ROSECl_Y5_i = GOLIATH(X=exo,type='CSB',clustering = "train" ,w=w,N=N_new, CSB_param=CSB_param_ROSE, mode = mod,Y=endo, method_Y=method_y)$synth 
+  train_GOLIATH_ROSECl_Y5 = append(train_GOLIATH_ROSECl_Y5, list(train_GOLIATH_ROSECl_Y5_i))
+}
+names(train_GOLIATH_ROSECl_Y5) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+```
+ 
+ 
+ 
+##### CSB : Gaussian Noise
+```{r, warning=F}
+CSB_param_GN = list('kern'='GN', 'pert'= pert)
+train_GOLIATH_GN_Y5 = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+train_GOLIATH_GN_Y5_i = GOLIATH(X=exo,type='CSB',clustering = F ,w=w,N=N_new, CSB_param=CSB_param_GN, mode = mod,Y=endo, method_Y=method_y)$synth
+  train_GOLIATH_GN_Y5 = append(train_GOLIATH_GN_Y5, list(train_GOLIATH_GN_Y5_i))
+}
+ 
+names(train_GOLIATH_GN_Y5) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+ 
+```
+ 
+ 
+##### CSB : Gaussian Noise - cluster
+```{r, warning=F}
+CSB_param_GN = list('kern'='GN', 'pert'= pert)
+train_GOLIATH_GNCl_Y5 = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+train_GOLIATH_GNCl_Y5_i = GOLIATH(X=exo,type='CSB',clustering = "train" ,w=w,N=N_new, CSB_param=CSB_param_GN, mode = mod,Y=endo, method_Y=method_y)$synth
+  train_GOLIATH_GNCl_Y5 = append(train_GOLIATH_GNCl_Y5, list(train_GOLIATH_GNCl_Y5_i))
+}
+ 
+names(train_GOLIATH_GNCl_Y5) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+ 
+```
+ 
+ 
+##### Interpolation Family : SMOTE
+```{r, warning=F}
+NNSB_param_SMOTE = list('k'=k_smote, 'pi_ij'='Unif','fun_interp'='Unif')
+train_GOLIATH_SMOTE_Y5= list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+train_GOLIATH_SMOTE_Y5_i = GOLIATH(X=exo,type='NNSB',clustering = F ,w=w,N=N_new, NNSB_param=NNSB_param_SMOTE, mode = mod,Y=endo, method_Y=method_y)$synth
+  train_GOLIATH_SMOTE_Y5 = append(train_GOLIATH_SMOTE_Y5, list(train_GOLIATH_SMOTE_Y5_i))
+}
+ 
+names(train_GOLIATH_SMOTE_Y5) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+ 
+```
+ 
+##### Interpolation Family : SMOTE - cluster
+```{r, warning=F}
+# NNSB_param_SMOTE = list('k'= k_smote, 'pi_ij'='Unif','fun_interp'='Unif')
+# train_GOLIATH_SMOTECl_Y5= list()
+# p = ncol(train_imb[[1]])
+# n = nrow(train_imb[[1]])
+# N_new=n
+# for (i in names(train_imb)){
+#   exo = train_imb[[i]][,seq(p-1)]
+#   endo = subset(train_imb[[i]],select = Y)
+# train_GOLIATH_SMOTECl_Y5_i = GOLIATH(X=exo,type='NNSB',clustering = "train" ,w=w,N=N_new, NNSB_param=NNSB_param_SMOTE, mode = mod,Y=endo, method_Y=method_y)$synth
+#   train_GOLIATH_SMOTECl_Y5 = append(train_GOLIATH_SMOTECl_Y5, list(train_GOLIATH_SMOTECl_Y5_i))
+# }
+# 
+# names(train_GOLIATH_SMOTE_Y5) = names(train_imb)
+# 
+# save.image("C:/Users/samgo/OneDrive/Perso/Thèse/Travaux/GHOLIATH/Illustration/WKS_save.RData")
+#  
+```
+ 
+ 
+ 
+```{r}
+w =  weight_y(train_imb[[1]]$Temp)
+w2 =  weight_y2(train_imb[[1]]$Temp)
+plot(train_imb[[1]]$Temp,w)
+points(train_imb[[1]]$Temp,UBL::phi(train_imb[[1]]$Temp, control.parms=phiF.argsR),col="darkred")
+```
+ 
+ 
+ 
+##### Classical Smoothed Boostrap : Classical Smoothed Boostrap
+```{r, warning=F}
+
+```
+ 
+
+##### Classical Smoothed Boostrap : Full Classical Smoothed Boostrap
+*Beaucoup trop lourd/long*
+```{r, warning=F}
+# CSB_param_FCSB = list('kern'='FGSB')
+# p = ncol(train_imb[[1]])
+# n = nrow(train_imb[[1]])
+# N_new=n
+# for (i in names(train_imb)[1]){
+# exo = train_imb[[i]][,seq(p-1)]
+# endo = subset(train_imb[[i]],select = Y)
+# w = weight_y(endo[,Y])
+# train_GOLIATH_GN_Y5_i = GOLIATH(X=exo,type='CSB',clustering = F ,w=w,N=N_new, CSB_param=CSB_param_FCSB, mode = mod,Y=endo, method_Y=method_y)$synth
+# 
+# ech_synth = GOLIATH(X=X,Y=Y,seed = seed_X, type='CSB',N=N, CSB_param=CSB_param)
+# }
+```
+
+
+
+
+ 
+##### Non-Classical Smoothed Boostrap : Univariate Kernel Product
+ 
+*mettre un plancher à 0 pour la variable 3 en partant de la fin afind 'appliquer une gamma* 
+
+```{r}
+for (col in seq(ncol(exo))){
+  analyse_quanti(base=exo,var=colnames(exo)[col])
+}
+str(exo)
+```
+
+
+ *Paramètre min-max à automatiser avec les min-max sur les data
+```{r, warning=F}
+NCSB_param = list('min' = c(NA,NA,NA,NA,NA,NA,NA,NA,0,0,0,0,0,-4.2,NA,NA),'max' = c(NA,NA,NA,NA,NA,NA,NA,NA,626,NA,NA,NA,NA,NA,NA),"hmult"=hmult)
+train_GOLIATH_NCSB_Y5 = list()
+
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+  train_GOLIATH_NCSB_Y5_i = GOLIATH(X=exo,type='NCSB',clustering = F ,w=w,N=N_new, mode = mod,Y=endo, method_Y=method_y, NCSB_param=NCSB_param)$synth
+  train_GOLIATH_NCSB_Y5 = append(train_GOLIATH_NCSB_Y5, list(train_GOLIATH_NCSB_Y5_i))
+}
+
+names(train_GOLIATH_NCSB_Y5) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+
+```
+ 
+ 
+avec min-max partout
+```{r, warning=F}
+# NCSBMM_param = list('min' = apply(data,2,min),'max' = apply(data,2,max),"hmult"=0.5)
+# 
+# 
+# train_GOLIATH_NCSBMM_Y5 = list()
+# p = ncol(train_imb[[1]])
+# n = nrow(train_imb[[1]])
+# N_new=n
+# for (i in names(train_imb)){
+#   exo = train_imb[[i]][,seq(p-1)]
+#   endo = subset(train_imb[[i]],select = Y)
+#   w = weight_y(endo[,Y])
+#   train_GOLIATH_NCSBMM_Y5_i = GOLIATH(X=exo,type='NCSB',clustering = F ,w=w,N=N_new, mode = mod,Y=endo, method_Y=method_y, NCSB_param=NCSBMM_param)$synth
+#   train_GOLIATH_NCSBMM_Y5 = append(train_GOLIATH_NCSBMM_Y5, list(train_GOLIATH_NCSBMM_Y5_i))
+# }
+# 
+# names(train_GOLIATH_NCSBMM_Y5) = names(train_imb)
+#  
+# save.image("WKS_save.RData")
+# beepr::beep(2)
+```
+ 
+Sans contrainte min-max
+```{r, warning=F}
+NCSB_paramNA = list('min' = c(NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA),
+'max' = c(NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA), "hmult"=hmult)
+ 
+
+train_GOLIATH_NCSBNA_Y5 = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+  train_GOLIATH_NCSBNA_Y5_i = GOLIATH(X=exo,type='NCSB',clustering = F ,w=w,N=N_new, mode = mod,Y=endo, method_Y=method_y, NCSB_param=NCSB_paramNA)$synth
+  train_GOLIATH_NCSBNA_Y5 = append(train_GOLIATH_NCSBNA_Y5, list(train_GOLIATH_NCSBNA_Y5_i))
+}
+
+names(train_GOLIATH_NCSBNA_Y5) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+
+```
+
+
+
+ 
+ 
+##### Interpolation Family : SMOTE - dist
+```{r, warning=F}
+NNSB_param_SMOTED = list('k'=k_smote, 'pi_ij'='Dist','fun_interp'='Beta','Beta_alpha' = 2,'Beta_beta' = 5)
+train_GOLIATH_SMOTED_Y5 = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+train_GOLIATH_SMOTED_Y5_i = GOLIATH(X=exo,type='NNSB',clustering = F ,w=w,N=N_new, NNSB_param=NNSB_param_SMOTED, mode = mod,Y=endo, method_Y=method_y)$synth
+  train_GOLIATH_SMOTED_Y5 = append(train_GOLIATH_SMOTED_Y5, list(train_GOLIATH_SMOTED_Y5_i))
+}
+names(train_GOLIATH_SMOTED_Y5) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+
+```
+
+
+##### Interpolation Family : beta-SMOTE
+```{r, warning=F}
+NNSB_param_SMOTEB = list('k'=k_smote, 'pi_ij'='Unif','fun_interp'='Beta','Beta_alpha' = 2,'Beta_beta' = 5)
+train_GOLIATH_SMOTEB_Y5 = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+train_GOLIATH_SMOTEB_Y5_i = GOLIATH(X=exo,type='NNSB',clustering = F ,w=w,N=N_new, NNSB_param=NNSB_param_SMOTEB, mode = mod,Y=endo, method_Y=method_y)$synth
+  train_GOLIATH_SMOTEB_Y5 = append(train_GOLIATH_SMOTEB_Y5, list(train_GOLIATH_SMOTEB_Y5_i))
+}
+
+names(train_GOLIATH_SMOTEB_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+
+
+```
+
+
+```{r}
+plot(density(rbeta(100000,2,5)))
+```
+
+
+##### Interpolation Family : e-smote
+```{r, warning=F}
+NNSB_param_eSMOTE = list('k'=k_smote,'pi_ij'='Unif','fun_interp'='Beta','Beta_alpha' = 2,'Beta_beta' = 5,'Ex_sig' = 0.05)
+train_GOLIATH_eSMOTE_Y5 = list()
+p = ncol(train_imb[[1]])
+n = nrow(train_imb[[1]])
+N_new=n
+for (i in names(train_imb)){
+  exo = train_imb[[i]][,seq(p-1)]
+  endo = subset(train_imb[[i]],select = Y)
+  w = weight_y(endo[,Y])
+train_GOLIATH_eSMOTE_Y5_i = GOLIATH(X=exo,type='NNSB',clustering = F ,w=w,N=N_new, NNSB_param=NNSB_param_eSMOTE, mode = mod,Y=endo, method_Y=method_y)$synth
+  train_GOLIATH_eSMOTE_Y5 = append(train_GOLIATH_eSMOTE_Y5, list(train_GOLIATH_eSMOTE_Y5_i))
+}
+names(train_GOLIATH_eSMOTE_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+
+```
+
+
+
+
+
+
+
+
+```{r}
+# hist(train_GOLIATH_OS[[1]][,Y], breaks=100, col="deepskyblue4")
+# hist(train_imb[[1]][,Y], breaks=100, col="darkred",add=T)
+# hist(train_GOLIATH_GN_Y5_ClTrain[[1]][,Y], breaks=100, col="deepskyblue4")
+# hist(train_imb[[1]][,Y], breaks=100, col="darkred",add=T)
+# hist(train_GOLIATH_GN_Y5[[1]][,Y], breaks=100, col="deepskyblue4")
+# hist(train_imb[[1]][,Y], breaks=100, col="darkred",add=T)
+# hist(train_GOLIATH_ROSE_Y5[[1]][,Y], breaks=100, col="deepskyblue4")
+# hist(train_imb[[1]][,Y], breaks=100, col="darkred",add=T)
+# hist(train_GOLIATH_SMOTE_Y5[[1]][,Y], breaks=100, col="deepskyblue4")
+# hist(train_imb[[1]][,Y], breaks=100, col="darkred",add=T)
+#  
+#  
+ 
+ 
+```
+ 
+ 
+```{r}
+beepr::beep(2)
+# stop("generation GOLIATH")
+```
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+## Predictions
+### Definition of autoML
+autoML H2o : https://docs.h2o.ai/h2o/latest-stable/h2o-docs/automl.html#leaderboard
+
+```{r}
+auto_ML = function(train, test, y,type="h2o"){
+  if (type=="h2o"){
+    #h2o.init()
+    train_h2o = as.h2o(train)
+    test_h2o = as.h2o(test)
+    x = setdiff(names(train), y)
+    aml <- h2o.automl(x = x, y = y,training_frame = train_h2o,max_models = 10)
+    res_aml <- as.data.frame(aml@leaderboard)
+    predict = as.vector(h2o.predict(aml@leader, test_h2o))
+    corSpear = as.numeric(cor.test(test$Temp,as.vector(predict),method = "spearman",exact = F)$estimate)
+    R2Test = summary(lm(test$Temp~as.vector(predict)+0))$r.squared
+    RMSETest = rmse(test$Temp,as.vector(predict))
+    MAETest = mae(test$Temp,as.vector(predict))
+    w = weight_y(test$Temp)
+    xRMSETest = sqrt(msew(test$Temp,as.vector(predict),weights = w))
+   
+ 
+    return(list("aml"= aml,"res_aml" = res_aml,"rmseAML_mean"=mean(res_aml$rmse),"rmseAML_min"=min(res_aml$rmse),
+    "predict" = predict, "corr"=corSpear,"r2Test"=R2Test,"rmseTest"=RMSETest,"maeTest"=MAETest,"wrmseTest"=xRMSETest))
+   
+    #h2o.shutdown(prompt = F)
+    }
+}
+```
+
+
+
+### parameters
+```{r}
+type_aml="h2o"
+if (type_aml=="h2o"){h2o.init()}
+```
+ 
+### Reference
+#### Prediction on the whole train sample (reference values)
+```{r}
+res_train = list()
+beep_on_error(expr =
+  for (i in names(train)){
+    print(paste0("********************       ",i,"       ********************"))
+    res_train = append(res_train,list(auto_ML(train[[i]], test[[i]],Y,"h2o")))
+  }
+, sound = 5)
+names(res_train) = names(train)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+ 
+####prediction based on the imbalanced sample
+```{r}
+res_imb = list()
+beep_on_error(expr =
+  for (i in names(train_imb)){
+    print(paste0("********************       ",i,"       ********************"))
+    res_imb = append(res_imb,list(auto_ML(train_imb[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_imb) = names(train_imb)
+
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+ 
+ 
+ 
+ 
+### Benchmark
+ 
+#### prediction based on OS (UBL)
+```{r}
+res_BK_OS = list()
+beep_on_error(expr =
+  for (i in names(train_imb)){
+    print(paste0("********************       ",i,"       ********************"))
+    res_BK_OS = append(res_BK_OS,list(auto_ML(train_BK_OS[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_BK_OS) = names(train_imb)
+
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+#### prediction based on SMOTE (UBL)
+```{r}
+res_BK_SMOTE = list()
+beep_on_error(expr =
+  for (i in names(train_imb)){
+    print(paste0("********************       ",i,"       ********************"))
+    res_BK_SMOTE = append(res_BK_SMOTE,list(auto_ML(train_BK_SmoteR[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_BK_SMOTE) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+ 
+#### prediction based on GNR (UBL)
+```{r}
+res_BK_GNR= list()
+beep_on_error(expr =
+  for (i in names(train_imb)){
+    print(paste0("********************       ",i,"       ********************"))
+    res_BK_GNR = append(res_BK_GNR,list(auto_ML(train_BK_GNR[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_BK_GNR) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+ 
+#### prediction based on SMOGN (UBL)
+```{r}
+res_BK_SMOGN = list()
+beep_on_error(expr =
+  for (i in names(train_imb)){
+    print(paste0("********************       ",i,"       ********************"))
+
+    res_BK_SMOGN = append(res_BK_SMOGN,list(auto_ML(train_BK_SmoGN[[i]], test[[i]],Y,type_aml)))
+
+  }
+, sound = 5)
+names(res_BK_SMOGN) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+ 
+#### prediction based on WERCS (UBL)
+```{r}
+res_BK_WERCS = list()
+beep_on_error(expr =
+  for (i in names(train_imb)){
+    print(paste0("********************       ",i,"       ********************"))
+    res_BK_WERCS = append(res_BK_WERCS,list(auto_ML(train_BK_WERCS[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_BK_WERCS) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+ 
+ 
+#### prediction based on ADASYN (ILR)
+```{r}
+res_BK_ADASYN= list()
+beep_on_error(expr =
+  for (i in names(train_imb)){
+    print(paste0("********************       ",i,"       ********************"))
+    res_BK_ADASYN = append(res_BK_ADASYN,list(auto_ML(train_BK_ADASYN[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_BK_ADASYN) = names(train_imb)
+ 
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+ 
+ 
+ 
+```{r}
+# aml_ref_h2o$rmse_mean
+# res_aml_all$res_imb$rmse_mean
+# res_aml_all$res_BK_SMOTER$rmse_mean
+# res_aml_all$res_BK_GNR$rmse_mean
+# res_aml_all$res_BK_SMOGNR$rmse_mean
+# res_aml_all$res_BK_WERCSR$rmse_mean
+# res_aml_all$res_BK_ADASYNR$rmse_mean
+```
+
+
+  
+ 
+ 
+ 
+ 
+### GOLIATH
+
+
+ 
+#### prediction based on GMM
+```{r}
+res_GOLIATH_GMM = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_GMM = append(res_GOLIATH_GMM,list(auto_ML(train_GOLIATH_GMM[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_GMM) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+ 
+ 
+ 
+ 
+#### predictions based on OS
+ 
+```{r}
+res_GOLIATH_OS = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_OS = append(res_GOLIATH_OS,list(auto_ML(train_GOLIATH_OS[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_OS) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+ 
+#### predictions based on CSB
+ 
+```{r}
+res_GOLIATH_CSB = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_CSB = append(res_GOLIATH_CSB,list(auto_ML(train_GOLIATH_CSB_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_CSB) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+
+ 
+#### prediction based on ROSE
+```{r}
+res_GOLIATH_ROSE_Y5 = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_ROSE_Y5 = append(res_GOLIATH_ROSE_Y5,list(auto_ML(train_GOLIATH_ROSE_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_ROSE_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+ 
+ 
+ 
+ #### prediction based on ROSE-cluster
+```{r}
+res_GOLIATH_ROSECl_Y5 = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_ROSECl_Y5 = append(res_GOLIATH_ROSECl_Y5,list(auto_ML(train_GOLIATH_ROSECl_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_ROSECl_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+
+ 
+#### predictions based on GN
+ 
+```{r}
+res_GOLIATH_GN_Y5 = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_GN_Y5 = append(res_GOLIATH_GN_Y5,list(auto_ML(train_GOLIATH_GN_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_GN_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+
+#### predictions based on GN-cluster
+ 
+```{r}
+res_GOLIATH_GNCl_Y5 = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_GNCl_Y5 = append(res_GOLIATH_GNCl_Y5,list(auto_ML(train_GOLIATH_GNCl_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_GNCl_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+
+
+
+
+#### prediction based on Non-Classical Smoothed Bootstrap
+
+```{r}
+res_GOLIATH_NCSB_Y5 = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_NCSB_Y5 = append(res_GOLIATH_NCSB_Y5,list(auto_ML(train_GOLIATH_NCSB_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_NCSB_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+```{r}
+# res_GOLIATH_NCSBMM_Y5 = list()
+# beep_on_error(expr =
+#   for (i in (names(train_imb))){
+#     print(paste0("********************       ",i,"       ********************"))
+#     res_GOLIATH_NCSBMM_Y5 = append(res_GOLIATH_NCSBMM_Y5,list(auto_ML(train_GOLIATH_NCSBMM_Y5[[i]], test[[i]],Y,type_aml)))
+#   }
+# , sound = 5)
+# names(res_GOLIATH_NCSBMM_Y5) = names(train_imb)
+# 
+# save.image("WKS_save.RData")
+# beepr::beep(2)
+```
+
+
+```{r}
+res_GOLIATH_NCSBNA_Y5 = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_NCSBNA_Y5 = append(res_GOLIATH_NCSBNA_Y5,list(auto_ML(train_GOLIATH_NCSBNA_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_NCSBNA_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+
+
+
+
+```{r}
+# res_GOLIATH_OS[[6]]=NULL
+# res_GOLIATH_GN_Y1[[6]]=NULL
+```
+ 
+ 
+ 
+prediction based on GOLIATH : CSB-Gaussian
+```{r}
+# res_aml_all = append(res_aml_all,list("res_GOLIATH_CSB" = auto_ML(train_GOLIATH_CSB, test,Y,type_aml)))
+# #save.image("C:/Users/samgo/OneDrive/Perso/Thèse/Travaux/GOLIATH/Applications/WKS_save.RData")
+```
+ 
+ 
+```{r}
+# beepr::beep(3)
+# STOP
+```
+ 
+ 
+```{r}
+# print("Reference : ")
+# aml_ref_h2o$rmse_mean
+# print("Imbalanced : ")
+# res_aml_all$res_imb$rmse_mean
+# print("Benchmark : ")
+# res_aml_all$res_BK_SMOTER$rmse_mean
+# res_aml_all$res_BK_GNR$rmse_mean
+# res_aml_all$res_BK_SMOGNR$rmse_mean
+# res_aml_all$res_BK_WERCSR$rmse_mean
+# res_aml_all$res_BK_ADASYNR$rmse_mean
+# print("GOLIATH : ")
+# res_aml_all$res_GOLIATH_GN$rmse_mean
+# res_aml_all$res_GOLIATH_GN1$rmse_mean
+# res_aml_all$res_GOLIATH_GN2$rmse_mean
+# res_aml_all$res_GOLIATH_GN3$rmse_mean
+# res_aml_all$res_GOLIATH_GN5$rmse_mean
+# res_aml_all$res_GOLIATH_GN6$rmse_mean
+# res_aml_all$res_GOLIATH_GN4$rmse_mean
+# res_aml_all$res_GOLIATH_GN4Add$rmse_mean
+```
+```{r}
+# print("Reference : ")
+# aml_ref_h2o$rmse_min
+# print("Imbalanced : ")
+# res_aml_all$res_imb$rmse_min
+# print("Benchmark : ")
+# res_aml_all$res_BK_SMOTER$rmse_min
+# res_aml_all$res_BK_GNR$rmse_min
+# res_aml_all$res_BK_SMOGNR$rmse_min
+# res_aml_all$res_BK_WERCSR$rmse_min
+# res_aml_all$res_BK_ADASYNR$rmse_min
+# print("GOLIATH : ")
+# res_aml_all$res_GOLIATH_GN$rmse_min
+# res_aml_all$res_GOLIATH_GN1$rmse_min
+# res_aml_all$res_GOLIATH_GN2$rmse_min
+# res_aml_all$res_GOLIATH_GN3$rmse_min
+# res_aml_all$res_GOLIATH_GN4$rmse_min
+# res_aml_all$res_GOLIATH_GN5$rmse_min
+# res_aml_all$res_GOLIATH_GN6$rmse_min
+```
+ 
+ 
+ 
+#### prediction based on SMOTE
+```{r}
+res_GOLIATH_SMOTE_Y5 = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_SMOTE_Y5 = append(res_GOLIATH_SMOTE_Y5,list(auto_ML(train_GOLIATH_SMOTE_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_SMOTE_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+ 
+#### prediction based on SMOTE-Dist
+```{r}
+res_GOLIATH_SMOTED_Y5 = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_SMOTED_Y5 = append(res_GOLIATH_SMOTED_Y5,list(auto_ML(train_GOLIATH_SMOTED_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_SMOTED_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+```
+ 
+
+#### prediction based on beta-SMOTE
+```{r}
+res_GOLIATH_SMOTEB_Y5 = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_SMOTEB_Y5 = append(res_GOLIATH_SMOTEB_Y5,list(auto_ML(train_GOLIATH_SMOTEB_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_SMOTEB_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+``` 
+ 
+ 
+#### prediction based on e-SMOTE
+```{r}
+res_GOLIATH_eSMOTE_Y5 = list()
+beep_on_error(expr =
+  for (i in (names(train_imb))){
+    print(paste0("********************       ",i,"       ********************"))
+    res_GOLIATH_eSMOTE_Y5 = append(res_GOLIATH_eSMOTE_Y5,list(auto_ML(train_GOLIATH_eSMOTE_Y5[[i]], test[[i]],Y,type_aml)))
+  }
+, sound = 5)
+names(res_GOLIATH_eSMOTE_Y5) = names(train_imb)
+
+save.image("WKS_save.RData")
+beepr::beep(2)
+Sys.sleep(10)
+``` 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+```{r}data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABIAAAASCAYAAABWzo5XAAAAWElEQVR42mNgGPTAxsZmJsVqQApgmGw1yApwKcQiT7phRBuCzzCSDSHGMKINIeDNmWQlA2IigKJwIssQkHdINgxfmBBtGDEBS3KCxBc7pMQgMYE5c/AXPwAwSX4lV3pTWwAAAABJRU5ErkJggg==
+if (type_aml=="h2o"){h2o.shutdown(prompt = F)}
+# stop("Predictions")
+```
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+## Resultats
+ 
+```{r}
+getwd()
+```
+```{r}
+names(train_imb)
+```
+
+
+### RMSE pour papier
+```{r}
+res =  matrix(rep(0,19*N_sample),N_sample,19)
+k=1
+for (i in names(train_imb)){
+  res[k,1] = round(res_train[[i]]$rmseTest*100,0)/100
+  res[k,2] = round(res_imb[[i]]$rmseTest*100,0)/100
+  res[k,3] = round(res_BK_OS[[i]]$rmseTest*100,0)/100
+  res[k,4] = round(res_BK_SMOTE[[i]]$rmseTest*100,0)/100
+  res[k,5] = round(res_BK_GNR[[i]]$rmseTest*100,0)/100
+  res[k,6] = round(res_BK_SMOGN[[i]]$rmseTest*100,0)/100
+  res[k,7] = round(res_BK_WERCS[[i]]$rmseTest*100,0)/100
+  res[k,8] = round(res_BK_ADASYN[[i]]$rmseTest*100,0)/100
+  res[k,9] = round(res_GOLIATH_OS[[i]]$rmseTest*100,0)/100
+  res[k,10] = round(res_GOLIATH_GN_Y5[[i]]$rmseTest*100,0)/100
+  res[k,11] = round(res_GOLIATH_GNCl_Y5[[i]]$rmseTest*100,0)/100
+  res[k,12] = round(res_GOLIATH_ROSE_Y5[[i]]$rmseTest*100,0)/100
+  res[k,13] = round(res_GOLIATH_ROSECl_Y5[[i]]$rmseTest*100,0)/100
+  res[k,14] = round(res_GOLIATH_SMOTE_Y5[[i]]$rmseTest*100,0)/100
+  res[k,15] = round(res_GOLIATH_NCSB_Y5[[i]]$rmseTest*100,0)/100
+  res[k,16] = round(res_GOLIATH_NCSBNA_Y5[[i]]$rmseTest*100,0)/100
+  res[k,17] = round(res_GOLIATH_SMOTEB_Y5[[i]]$rmseTest*100,0)/100
+  res[k,19] = round(res_GOLIATH_SMOTED_Y5[[i]]$rmseTest*100,0)/100
+  res[k,18] = round(res_GOLIATH_eSMOTE_Y5[[i]]$rmseTest*100,0)/100
+  k=k+1
+}
+df_res =as.data.frame(res)
+list_train = c("Ftrain","Imb","UBL-OS", "UBL-SMOTE","UBL-GN","UBL-SMOGN","UBL-WERCS","IRL-ADASYN","G-OS",
+                     "G-GN","G-GNwCl","G-ROSE","G-ROSEwCl","G-SMOTE","G-NCSB","G-CSB","G-NNSB","G-NNSBw","G-eNNSB")
+colnames(df_res) = list_train
+df_res_list = stack(df_res)
+colnames(df_res_list) = c("RMSE","Train")
+
+ggplot(df_res_list, aes(x=Train, y=RMSE, fill=Train)) + geom_boxplot()    
+  ggsave("boxplotRMSE.png",width=7.29, height=4.5)
+
+
+# tableau d'indicateurs avec mean et sd
+IndMoy = as.data.frame(t(colMeans(res)))
+colnames(IndMoy) = list_train
+row.names(IndMoy)="mean"
+IndVar = as.data.frame(t(apply(res,2,sd)))
+colnames(IndVar) = list_train
+row.names(IndVar)="sd"
+df_res = rbind(df_res, IndMoy,IndVar)
+df_res = as.data.frame(t(df_res))
+df_res
+write.csv2(df_res,"df_resRMSE.csv")
+
+# tableua de rang
+df_rank = as.data.frame(rowRanks(res)-1)
+colnames(df_rank) = list_train
+IndMoy = as.data.frame(t(colMeans(df_rank)))
+colnames(IndMoy) = list_train
+row.names(IndMoy)="mean"
+IndVar = as.data.frame(t(apply(df_rank,2,sd)))
+colnames(IndVar) = list_train
+row.names(IndVar)="sd"
+df_rank = rbind(df_rank, IndMoy,IndVar)
+df_rank$Ftrain=NULL
+df_rank = as.data.frame(t(df_rank))
+df_rank 
+write.csv2(df_rank,"df_rankRMSE.csv")
+
+fig <- plot_ly(df_res_list, y = ~ RMSE, color = ~ Train, type = "box", main = "RMSE")  
+fig 
+
+
+```
+
+
+### wRMSE
+```{r}
+res =  matrix(rep(0,19*N_sample),N_sample,19)
+k=1
+for (i in names(train_imb)){
+  res[k,1] = round(res_train[[i]]$wrmseTest*100,0)/100
+  res[k,2] = round(res_imb[[i]]$wrmseTest*100,0)/100
+  res[k,3] = round(res_BK_OS[[i]]$wrmseTest*100,0)/100
+  res[k,4] = round(res_BK_SMOTE[[i]]$wrmseTest*100,0)/100
+  res[k,5] = round(res_BK_GNR[[i]]$wrmseTest*100,0)/100
+  res[k,6] = round(res_BK_SMOGN[[i]]$wrmseTest*100,0)/100
+  res[k,7] = round(res_BK_WERCS[[i]]$wrmseTest*100,0)/100
+  res[k,8] = round(res_BK_ADASYN[[i]]$wrmseTest*100,0)/100
+  res[k,9] = round(res_GOLIATH_OS[[i]]$wrmseTest*100,0)/100
+  res[k,10] = round(res_GOLIATH_GN_Y5[[i]]$wrmseTest*100,0)/100
+  res[k,11] = round(res_GOLIATH_GNCl_Y5[[i]]$wrmseTest*100,0)/100
+  res[k,12] = round(res_GOLIATH_ROSE_Y5[[i]]$wrmseTest*100,0)/100
+  res[k,13] = round(res_GOLIATH_ROSECl_Y5[[i]]$wrmseTest*100,0)/100
+  res[k,14] = round(res_GOLIATH_SMOTE_Y5[[i]]$wrmseTest*100,0)/100
+  res[k,15] = round(res_GOLIATH_NCSB_Y5[[i]]$wrmseTest*100,0)/100
+  res[k,16] = round(res_GOLIATH_NCSBNA_Y5[[i]]$wrmseTest*100,0)/100
+  res[k,17] = round(res_GOLIATH_SMOTEB_Y5[[i]]$wrmseTest*100,0)/100
+  res[k,19] = round(res_GOLIATH_SMOTED_Y5[[i]]$wrmseTest*100,0)/100
+  res[k,18] = round(res_GOLIATH_eSMOTE_Y5[[i]]$wrmseTest*100,0)/100
+  k=k+1
+}
+df_res =as.data.frame(res)
+list_train = c("Ftrain","Imb","UBL-OS", "UBLSMOTE","UBL-GN","UBL-SMOGN","UBL-WERCS","IRL-ADASYN","G-OS",
+                     "G-GN","G-GNWCl","G-ROSE","G-ROSEWCl","G-SMOTE","G-NCSB","G-CSB","G-bSMOTE","G-bSMOTEw","G-eSMOTE")
+colnames(df_res) = list_train
+df_res_list = stack(df_res)
+colnames(df_res_list) = c("wRMSE","Train")
+
+ggplot(df_res_list, aes(x=Train, y=wRMSE, fill=Train)) + geom_boxplot()    
+  ggsave("boxplotwRMSE.png",width=7.29, height=4.5)
+
+
+# tableau d'indicateurs avec mean et sd
+IndMoy = as.data.frame(t(colMeans(res)))
+colnames(IndMoy) = list_train
+row.names(IndMoy)="mean"
+IndVar = as.data.frame(t(apply(res,2,sd)))
+colnames(IndVar) = list_train
+row.names(IndVar)="sd"
+df_res = rbind(df_res, IndMoy,IndVar)
+df_res = as.data.frame(t(df_res))
+df_res
+write.csv2(df_res,"df_reswRMSE.csv")
+
+# tableua de rang
+df_rank = as.data.frame(rowRanks(res)-1)
+colnames(df_rank) = list_train
+IndMoy = as.data.frame(t(colMeans(df_rank)))
+colnames(IndMoy) = list_train
+row.names(IndMoy)="mean"
+IndVar = as.data.frame(t(apply(df_rank,2,sd)))
+colnames(IndVar) = list_train
+row.names(IndVar)="sd"
+df_rank = rbind(df_rank, IndMoy,IndVar)
+df_rank$Ftrain=NULL
+df_rank = as.data.frame(t(df_rank))
+df_rank 
+write.csv2(df_rank,"df_rankwRMSE.csv")
+
+fig <- plot_ly(df_res_list, y = ~ wRMSE, color = ~ Train, type = "box", main = "wRMSE")  
+fig 
+```
+
+
+ 
+### MAE
+```{r}
+res =  matrix(rep(0,19*N_sample),N_sample,19)
+k=1
+for (i in names(train_imb)){
+  res[k,1] = round(res_train[[i]]$maeTest*100,0)/100
+  res[k,2] = round(res_imb[[i]]$maeTest*100,0)/100
+  res[k,3] = round(res_BK_OS[[i]]$maeTest*100,0)/100
+  res[k,4] = round(res_BK_SMOTE[[i]]$maeTest*100,0)/100
+  res[k,5] = round(res_BK_GNR[[i]]$maeTest*100,0)/100
+  res[k,6] = round(res_BK_SMOGN[[i]]$maeTest*100,0)/100
+  res[k,7] = round(res_BK_WERCS[[i]]$maeTest*100,0)/100
+  res[k,8] = round(res_BK_ADASYN[[i]]$maeTest*100,0)/100
+  res[k,9] = round(res_GOLIATH_OS[[i]]$maeTest*100,0)/100
+  res[k,10] = round(res_GOLIATH_GN_Y5[[i]]$maeTest*100,0)/100
+  res[k,11] = round(res_GOLIATH_GNCl_Y5[[i]]$maeTest*100,0)/100
+  res[k,12] = round(res_GOLIATH_ROSE_Y5[[i]]$maeTest*100,0)/100
+  res[k,13] = round(res_GOLIATH_ROSECl_Y5[[i]]$maeTest*100,0)/100
+  res[k,14] = round(res_GOLIATH_SMOTE_Y5[[i]]$maeTest*100,0)/100
+  res[k,15] = round(res_GOLIATH_NCSB_Y5[[i]]$maeTest*100,0)/100
+  res[k,16] = round(res_GOLIATH_NCSBNA_Y5[[i]]$maeTest*100,0)/100
+  res[k,17] = round(res_GOLIATH_SMOTEB_Y5[[i]]$maeTest*100,0)/100
+  res[k,19] = round(res_GOLIATH_SMOTED_Y5[[i]]$maeTest*100,0)/100
+  res[k,18] = round(res_GOLIATH_eSMOTE_Y5[[i]]$maeTest*100,0)/100
+  k=k+1
+}
+df_res =as.data.frame(res)
+list_train = c("Ftrain","Imb","UBL-OS", "UBLSMOTE","UBL-GN","UBL-SMOGN","UBL-WERCS","IRL-ADASYN","G-OS",
+                     "G-GN","G-GNWCl","G-ROSE","G-ROSEWCl","G-SMOTE","G-NCSB","G-CSB","G-bSMOTE","G-bSMOTEw","G-eSMOTE")
+colnames(df_res) = list_train
+df_res_list = stack(df_res)
+colnames(df_res_list) = c("MAE","Train")
+
+ggplot(df_res_list, aes(x=Train, y=MAE, fill=Train)) + geom_boxplot()    
+  ggsave("boxplotMAE.png",width=7.29, height=4.5)
+
+
+# tableau d'indicateurs avec mean et sd
+IndMoy = as.data.frame(t(colMeans(res)))
+colnames(IndMoy) = list_train
+row.names(IndMoy)="mean"
+IndVar = as.data.frame(t(apply(res,2,sd)))
+colnames(IndVar) = list_train
+row.names(IndVar)="sd"
+df_res = rbind(df_res, IndMoy,IndVar)
+df_res = as.data.frame(t(df_res))
+df_res
+write.csv2(df_res,"df_resMAE.csv")
+
+# tableua de rang
+df_rank = as.data.frame(rowRanks(res)-1)
+colnames(df_rank) = list_train
+IndMoy = as.data.frame(t(colMeans(df_rank)))
+colnames(IndMoy) = list_train
+row.names(IndMoy)="mean"
+IndVar = as.data.frame(t(apply(df_rank,2,sd)))
+colnames(IndVar) = list_train
+row.names(IndVar)="sd"
+df_rank = rbind(df_rank, IndMoy,IndVar)
+df_rank$Ftrain=NULL
+df_rank = as.data.frame(t(df_rank))
+df_rank 
+write.csv2(df_rank,"df_rankMAE.csv")
+
+fig <- plot_ly(df_res_list, y = ~ MAE, color = ~ Train, type = "box", main = "MAE")  
+fig 
+```
+
+ 
+```{r}
+beepr::beep(3)
+stop("Resultats")
+```
+
+### R2
+```{r}
+res =  matrix(rep(0,19*N_sample),N_sample,19)
+k=1
+for (i in names(train_imb)){
+  res[k,1] = round(res_train[[i]]$r2Test*100,0)/100
+  res[k,2] = round(res_imb[[i]]$r2Test*100,0)/100
+  res[k,3] = round(res_BK_OS[[i]]$r2Test*100,0)/100
+  res[k,4] = round(res_BK_SMOTE[[i]]$r2Test*100,0)/100
+  res[k,5] = round(res_BK_GNR[[i]]$r2Test*100,0)/100
+  res[k,6] = round(res_BK_SMOGN[[i]]$r2Test*100,0)/100
+  res[k,7] = round(res_BK_WERCS[[i]]$r2Test*100,0)/100
+  res[k,8] = round(res_BK_ADASYN[[i]]$r2Test*100,0)/100
+  res[k,9] = round(res_GOLIATH_OS[[i]]$r2Test*100,0)/100
+  res[k,10] = round(res_GOLIATH_GN_Y5[[i]]$r2Test*100,0)/100
+  res[k,11] = round(res_GOLIATH_GNCl_Y5[[i]]$r2Test*100,0)/100
+  res[k,12] = round(res_GOLIATH_ROSE_Y5[[i]]$r2Test*100,0)/100
+  res[k,13] = round(res_GOLIATH_ROSECl_Y5[[i]]$r2Test*100,0)/100
+  res[k,14] = round(res_GOLIATH_SMOTE_Y5[[i]]$r2Test*100,0)/100
+  res[k,15] = round(res_GOLIATH_NCSB_Y5[[i]]$r2Test*100,0)/100
+  res[k,16] = round(res_GOLIATH_NCSBNA_Y5[[i]]$r2Test*100,0)/100
+  res[k,17] = round(res_GOLIATH_SMOTEB_Y5[[i]]$r2Test*100,0)/100
+  res[k,19] = round(res_GOLIATH_SMOTED_Y5[[i]]$r2Test*100,0)/100
+  res[k,18] = round(res_GOLIATH_eSMOTE_Y5[[i]]$r2Test*100,0)/100
+  k=k+1
+}
+df_res =as.data.frame(res)
+list_train = c("Ftrain","Imb","UBL-OS", "UBLSMOTE","UBL-GN","UBL-SMOGN","UBL-WERCS","IRL-ADASYN","G-OS",
+                     "G-GN","G-GNWCl","G-ROSE","G-ROSEWCl","G-SMOTE","G-NCSB","G-CSB","G-bSMOTE","G-bSMOTEw","G-eSMOTE")
+colnames(df_res) = list_train
+df_res_list = stack(df_res)
+colnames(df_res_list) = c("R2","Train")
+
+ggplot(df_res_list, aes(x=Train, y=R2, fill=Train)) + geom_boxplot()    
+  ggsave("boxplotR2.png",width=7.29, height=4.5)
+
+
+# tableau d'indicateurs avec mean et sd
+IndMoy = as.data.frame(t(colMeans(res)))
+colnames(IndMoy) = list_train
+row.names(IndMoy)="mean"
+IndVar = as.data.frame(t(apply(res,2,sd)))
+colnames(IndVar) = list_train
+row.names(IndVar)="sd"
+df_res = rbind(df_res, IndMoy,IndVar)
+df_res = as.data.frame(t(df_res))
+df_res
+write.csv2(df_res,"df_resR2.csv")
+
+# tableua de rang
+df_rank = as.data.frame(rowRanks(res)-1)
+colnames(df_rank) = list_train
+IndMoy = as.data.frame(t(colMeans(df_rank)))
+colnames(IndMoy) = list_train
+row.names(IndMoy)="mean"
+IndVar = as.data.frame(t(apply(df_rank,2,sd)))
+colnames(IndVar) = list_train
+row.names(IndVar)="sd"
+df_rank = rbind(df_rank, IndMoy,IndVar)
+df_rank$Ftrain=NULL
+df_rank = as.data.frame(t(df_rank))
+df_rank 
+write.csv2(df_rank,"df_rankR2.csv")
+
+fig <- plot_ly(df_res_list, y = ~ R2, color = ~ Train, type = "box", main = "R2")  
+fig 
+```
+
+
+
+Comparatif génération de données
+```{r}
+hist(train_GOLIATH_CSB_Y5[[1]]$Sun_irradiance)
+```
+ 
+ 
+ 
+```{r}
+beepr::beep(8)
+stop("Terminé !")
+```
+
+ 
